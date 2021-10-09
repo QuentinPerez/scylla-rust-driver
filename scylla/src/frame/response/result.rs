@@ -599,17 +599,20 @@ fn deser_cql_value(typ: &ColumnType, buf: &mut &[u8]) -> StdResult<CqlValue, Par
             CqlValue::BigInt(buf.read_i64::<BigEndian>()?)
         }
         Text => CqlValue::Text(str::from_utf8(buf)?.to_owned()),
-        Timestamp => {
-            if buf.len() != 8 {
+        Timestamp => match buf.len() {
+            8 => {
+                let millis = buf.read_i64::<BigEndian>()?;
+
+                CqlValue::Timestamp(Duration::milliseconds(millis))
+            }
+            0 => CqlValue::Timestamp(Duration::min_value()),
+            len => {
                 return Err(ParseError::BadData(format!(
-                    "Buffer length should be 8 not {}",
-                    buf.len()
+                    "Buffer length should be 8 or 0 not {}",
+                    len
                 )));
             }
-            let millis = buf.read_i64::<BigEndian>()?;
-
-            CqlValue::Timestamp(Duration::milliseconds(millis))
-        }
+        },
         Time => {
             if buf.len() != 8 {
                 return Err(ParseError::BadData(format!(
@@ -1204,6 +1207,18 @@ mod tests {
                 *test_val
             );
         }
+    }
+    #[test]
+    fn test_timestamp_deserialize_empty_payload() {
+        // special case to deserialize empty payload written by gocql
+        // see https://github.com/gocql/gocql/pull/441
+
+        let bytes: [u8; 0] = [];
+        let cql_value: CqlValue =
+            super::deser_cql_value(&ColumnType::Timestamp, &mut &bytes[..]).unwrap();
+        let min_duration = Duration::min_value();
+
+        assert_eq!(cql_value, CqlValue::Timestamp(min_duration));
     }
 
     #[test]
